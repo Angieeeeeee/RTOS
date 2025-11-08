@@ -15,6 +15,8 @@
 // Subroutines
 //-----------------------------------------------------------------------------
 
+char* uitoa(uint32_t num);
+char* inttohex(uint32_t num);
 void mpuFaultIsr(void);
 void hardFaultIsr(void);
 void busFaultIsr(void);

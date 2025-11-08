@@ -1,9 +1,7 @@
 // RTOS Framework - Fall 2025
 // J Losh
 
-// Student Name:
-// TO DO: Add your name on this line.
-//        Do not include your ID number in the file.
+// Student Name: Angelina Abuhilal
 
 // Please do not change any function name in this code or the thread priorities
 

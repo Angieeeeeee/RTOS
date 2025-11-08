@@ -26,6 +26,13 @@
 #define YELLOW_LED PORTA,3 // off-board yellow LED
 #define GREEN_LED  PORTA,4 // off-board green LED
 
+#define PB_0 PORTC,4
+#define PB_1 PORTC,5
+#define PB_2 PORTC,6
+#define PB_3 PORTC,7
+#define PB_4 PORTD,6
+#define PB_5 PORTD,7
+
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
@@ -35,19 +42,63 @@
 //           Add initialization for 6 pushbuttons
 void initHw(void)
 {
-    // Setup LEDs and pushbuttons
+    // Initialize system clock to 40 MHz
+    initSystemClockTo40Mhz();
+
+    // Enable PB and LED ports 
+    enablePort(PORTA);      
+    enablePort(PORTC);
+    enablePort(PORTD);
+    enablePort(PORTE);
+    enablePort(PORTF);
+    _delay_cycles(3);
+
+    setPinCommitControl(PORTD, 7);      // D7 unlock 
+
+    // LED outputs 
+    selectPinPushPullOutput(LED_BLUE);
+    selectPinPushPullOutput(LED_GREEN);
+    selectPinPushPullOutput(LED_YELLOW);
+    selectPinPushPullOutput(LED_ORANGE);
+    selectPinPushPullOutput(LED_RED);
+
+    // PB inputs 
+    selectPinDigitalInput(PB_0);
+    selectPinDigitalInput(PB_1);
+    selectPinDigitalInput(PB_2);
+    selectPinDigitalInput(PB_3);
+    selectPinDigitalInput(PB_4);
+    selectPinDigitalInput(PB_5);
+    // Pull up PBs 
+    enablePinPullup(PB_0);
+    enablePinPullup(PB_1);
+    enablePinPullup(PB_2);
+    enablePinPullup(PB_3);
+    enablePinPullup(PB_4);
+    enablePinPullup(PB_5);
 
     // Power-up flash
     setPinValue(GREEN_LED, 1);
     waitMicrosecond(250000);
     setPinValue(GREEN_LED, 0);
     waitMicrosecond(250000);
+
+    // Enable faults
+    NVIC_SYS_HND_CTRL_R |= NVIC_SYS_HND_CTRL_USAGE | NVIC_SYS_HND_CTRL_BUS | NVIC_SYS_HND_CTRL_MEM;
+
+    // Trap on Divide by Zero and Unalligned Access
+    NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0 ;
 }
 
-// REQUIRED: add code to return a value from 0-63 indicating which of 6 PBs are pressed
+// REQUIRED: add code to return a value from 0-6 indicating which of 6 PBs are pressed
 uint8_t readPbs(void)
 {
-    return 0;
+    if (!getPinValue(PB_0)) return 0;
+    if (!getPinValue(PB_1)) return 1;
+    if (!getPinValue(PB_2)) return 2;
+    if (!getPinValue(PB_3)) return 3;
+    if (!getPinValue(PB_4)) return 4;
+    if (!getPinValue(PB_5)) return 5;
 }
 
 // one task must be ready at all times or the scheduler will fail
