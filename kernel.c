@@ -218,9 +218,10 @@ void setThreadPriority(_fn fn, uint8_t priority)
 // that will yield execution back to the kernel that will save the context necessary for the resuming the task later.
 void yield(void)
 {
+    // trigger sv call
+    asm("svc 0");
     // trigger pendsv
     NVIC_INT_CTRL_R = NVIC_INT_CTRL_PEND_SV;
- 
 }
 
 // REQUIRED: modify this function to support 1ms system timer
@@ -257,44 +258,49 @@ void systickIsr(void)
 
 // REQUIRED: in coop and preemptive, modify this function to add support for task switching
 // REQUIRED: process UNRUN and READY tasks differently
-// push the registers, save PSP, call scheduler, restore PSP, restore SRD bits, and pop the registers to make a task switch to the same with only idle() task running.
-// save old, switch, restore new
+
+// 1. push the registers: r4-r11, LR, PC, xPSR in the stack to bring back the context of the task later
+// 2. save the PSP in the tcb, original sp will be shifted to make room for the registers
+// 3. call the scheduler to get the next task
+// 4. set the PSP to the new task's sp
+// 5. pop the registers to restore the context of the new task
+// 6. set the srd bits for the new task
+// make a task switch to the same with only idle() task running
+
 // hardest part: do task between two tasks
 void pendSvIsr(void)
 {
     // save sp left off
-    tcb[taskCurrent].sp = getPsp();
-    // task ran for first time 
-    if (tcb[taskCurrent].state == STATE_UNRUN)
+    uint32_t *sp = getPsp();
+
+    // task has now been ran at least once
+    if (tcb[taskCurrent].state == STATE_UNRUN) 
     {
         tcb[taskCurrent].state = STATE_READY;
     }
-    // task has run before
-    else if (tcb[taskCurrent].state == STATE_READY)
-    {
-        // save r4-r11 values
-        uint32_t r4, r5, r6, r7, r8, r9, r10, r11;
-        asm("mov %0, r4"  : "=r" (r4));
-        asm("mov %0, r5"  : "=r" (r5));
-        asm("mov %0, r6"  : "=r" (r6));
-        asm("mov %0, r7"  : "=r" (r7));
-        asm("mov %0, r8"  : "=r" (r8));
-        asm("mov %0, r9"  : "=r" (r9));
-        asm("mov %0, r10" : "=r" (r10));
-        asm("mov %0, r11" : "=r" (r11));
-        // store on stack
-        uint32_t *sp = (uint32_t *) tcb[taskCurrent].sp;
-        sp -= 8; // make room for r4-r11
-        sp[0] = r4;
-        sp[1] = r5;
-        sp[2] = r6;
-        sp[3] = r7;
-        sp[4] = r8;
-        sp[5] = r9;
-        sp[6] = r10;
-        sp[7] = r11;
-        tcb[taskCurrent].sp = sp;
-    }
+    // save r4-r11 values
+    uint32_t r4, r5, r6, r7, r8, r9, r10, r11;
+    asm("mov %0, r4"  : "=r" (r4));
+    asm("mov %0, r5"  : "=r" (r5));
+    asm("mov %0, r6"  : "=r" (r6));
+    asm("mov %0, r7"  : "=r" (r7));
+    asm("mov %0, r8"  : "=r" (r8));
+    asm("mov %0, r9"  : "=r" (r9));
+    asm("mov %0, r10" : "=r" (r10));
+    asm("mov %0, r11" : "=r" (r11));
+    // store on stack
+    sp -= 8 * 4; // make room for r4-r11, 8 registers at 4 bytes each
+    sp[0] = r4;
+    sp[1] = r5;
+    sp[2] = r6;
+    sp[3] = r7;
+    sp[4] = r8;
+    sp[5] = r9;
+    sp[6] = r10;
+    sp[7] = r11;
+    // save sp in tcb
+    tcb[taskCurrent].sp = (void *) sp;
+
     // get next task
     uint8_t task = rtosScheduler();
     // if its been run before, get its r4-11 values

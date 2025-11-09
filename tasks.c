@@ -88,6 +88,10 @@ void initHw(void)
 
     // Trap on Divide by Zero and Unalligned Access
     NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0 ;
+
+    // set pendSV and SVCall to highest priority
+    // see the SYSHNDCTRL register on page 173 and the DIS0 register on page 144 of the datasheet
+
 }
 
 // REQUIRED: add code to return a value from 0-6 indicating which of 6 PBs are pressed
