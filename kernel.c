@@ -16,6 +16,8 @@
 #include "tm4c123gh6pm.h"
 #include "mm.h"
 #include "kernel.h"
+#include "asm.h"
+#include "uart0.h"
 
 //-----------------------------------------------------------------------------
 // RTOS Defines and Kernel Variables
@@ -113,6 +115,7 @@ void initRtos(void)
 }
 
 // REQUIRED: Implement prioritization to NUM_PRIORITIES
+// loop through tcb and return index of next task to run
 uint8_t rtosScheduler(void)
 {
     bool ok;
@@ -125,6 +128,7 @@ uint8_t rtosScheduler(void)
             task = 0;
         ok = (tcb[task].state == STATE_READY || tcb[task].state == STATE_UNRUN);
     }
+    taskCurrent = task;
     return task;
 }
 
@@ -133,6 +137,21 @@ uint8_t rtosScheduler(void)
 // fn set TMPL bit, and PC <= fn
 void startRtos(void)
 {
+    uint8_t task = rtosScheduler();
+    tcb[task].state = STATE_READY;
+    // set srd bits
+    applySramAccessMask(tcb[task].srd);
+    // set PSP
+    setPsp(tcb[task].sp);
+    // set ASP bit
+    setAspOn();
+    // TODO: whatever this is
+    // call fn with fn add in R0
+
+    // fn set TMPL bit, priv off
+    setPrivOff();
+    // and PC <= fn
+
 }
 
 // REQUIRED:
@@ -159,9 +178,15 @@ bool createThread(_fn fn, const char name[], uint8_t priority, uint32_t stackByt
             while (tcb[i].state != STATE_INVALID) {i++;}
             tcb[i].state = STATE_UNRUN;
             tcb[i].pid = fn;
-            tcb[i].sp = 0;
             tcb[i].priority = priority;
-            tcb[i].srd = 0;
+            // copy name
+            uint8_t j;
+            for (j = 0; j < 15 && name[j] != 0; j++)
+            {
+                tcb[i].name[j] = name[j];
+            }
+            tcb[i].sp = mallocHeap(fn, stackBytes);
+            // tcb[i].srd added in malloc function
 
             // increment task count
             taskCount++;
@@ -189,8 +214,13 @@ void setThreadPriority(_fn fn, uint8_t priority)
 }
 
 // REQUIRED: modify this function to yield execution back to scheduler using pendsv
+// Code yield() incorporating svcIsr() and pendSvIsr()
+// that will yield execution back to the kernel that will save the context necessary for the resuming the task later.
 void yield(void)
 {
+    // trigger pendsv
+    NVIC_INT_CTRL_R = NVIC_INT_CTRL_PEND_SV;
+ 
 }
 
 // REQUIRED: modify this function to support 1ms system timer
@@ -227,13 +257,77 @@ void systickIsr(void)
 
 // REQUIRED: in coop and preemptive, modify this function to add support for task switching
 // REQUIRED: process UNRUN and READY tasks differently
+// push the registers, save PSP, call scheduler, restore PSP, restore SRD bits, and pop the registers to make a task switch to the same with only idle() task running.
+// save old, switch, restore new
+// hardest part: do task between two tasks
 void pendSvIsr(void)
 {
+    // save sp left off
+    tcb[taskCurrent].sp = getPsp();
+    // task ran for first time 
+    if (tcb[taskCurrent].state == STATE_UNRUN)
+    {
+        tcb[taskCurrent].state = STATE_READY;
+    }
+    // task has run before
+    else if (tcb[taskCurrent].state == STATE_READY)
+    {
+        // save r4-r11 values
+        uint32_t r4, r5, r6, r7, r8, r9, r10, r11;
+        asm("mov %0, r4"  : "=r" (r4));
+        asm("mov %0, r5"  : "=r" (r5));
+        asm("mov %0, r6"  : "=r" (r6));
+        asm("mov %0, r7"  : "=r" (r7));
+        asm("mov %0, r8"  : "=r" (r8));
+        asm("mov %0, r9"  : "=r" (r9));
+        asm("mov %0, r10" : "=r" (r10));
+        asm("mov %0, r11" : "=r" (r11));
+        // store on stack
+        uint32_t *sp = (uint32_t *) tcb[taskCurrent].sp;
+        sp -= 8; // make room for r4-r11
+        sp[0] = r4;
+        sp[1] = r5;
+        sp[2] = r6;
+        sp[3] = r7;
+        sp[4] = r8;
+        sp[5] = r9;
+        sp[6] = r10;
+        sp[7] = r11;
+        tcb[taskCurrent].sp = sp;
+    }
+    // get next task
+    uint8_t task = rtosScheduler();
+    // if its been run before, get its r4-11 values
+    if (tcb[task].state == STATE_READY)
+    {
+        uint32_t *sp = (uint32_t *) tcb[task].sp;
+        uint32_t r4 = sp[0];
+        uint32_t r5 = sp[1];
+        uint32_t r6 = sp[2];
+        uint32_t r7 = sp[3];
+        uint32_t r8 = sp[4];
+        uint32_t r9 = sp[5];
+        uint32_t r10 = sp[6];
+        uint32_t r11 = sp[7];
+        asm("mov r4,  %0" : : "r" (r4));
+        asm("mov r5,  %0" : : "r" (r5));
+        asm("mov r6,  %0" : : "r" (r6));
+        asm("mov r7,  %0" : : "r" (r7));
+        asm("mov r8,  %0" : : "r" (r8));
+        asm("mov r9,  %0" : : "r" (r9));
+        asm("mov r10, %0" : : "r" (r10));
+        asm("mov r11, %0" : : "r" (r11));
+    }
+    // set srd bits
+    applySramAccessMask(tcb[task].srd);
+    // set PSP
+    setPsp(tcb[task].sp);
 }
 
 // REQUIRED: modify this function to add support for the service call
 // REQUIRED: in preemptive code, add code to handle synchronization primitives
 void svCallIsr(void)
 {
+
 }
 

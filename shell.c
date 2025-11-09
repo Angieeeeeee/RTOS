@@ -19,6 +19,7 @@
 #include "mm.h"
 #include "faults.h"
 #include "tasks.h"
+#include "kernel.h"
 
 // REQUIRED: Add header files here for your strings functions, ...
 

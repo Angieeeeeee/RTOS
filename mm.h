@@ -33,8 +33,8 @@ BLOCK blockArray[NUM_BLOCKS];
 // Subroutines
 //-----------------------------------------------------------------------------
 
-void * mallocHeap(uint32_t size_in_bytes);
-void freeHeap(void *address_from_malloc);
+void * mallocHeap(_fn fn, uint32_t size_in_bytes);
+void freeHeap(_fn fn, void *address_from_malloc);
 void initMemoryManager(void);
 void setBackgroundRule(void);
 void allowFlashAccess(void);
