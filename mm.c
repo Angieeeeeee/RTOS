@@ -24,13 +24,14 @@
 //-----------------------------------------------------------------------------
 
 uint64_t srdBitmask = 0x0000000000000000;
+// there will be srd masks for each task in the tcb
 
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
 
 // REQUIRED: add your malloc code here and update the SRD bits for the current thread
-void * mallocHeap(_fn fn, uint32_t size_in_bytes)
+void * mallocHeap(uint8_t index, uint32_t size_in_bytes)
 {
     if (!size_in_bytes || (size_in_bytes > 0x00002000)) return NULL;     // null if size zero or greater than a region
 
@@ -69,12 +70,12 @@ void * mallocHeap(_fn fn, uint32_t size_in_bytes)
             for (k = i; k < i + blocks; k++)
             {
                 blockArray[k].alloc = true;
-                blockArray[k].owner = fn;
+                blockArray[k].owner = index;
                 blockArray[k].size = blocks;
             }
             // make those blocks have SRD bits 1 (RW access)
-            addSramAccessWindow(&srdBitmask, (void *)(HEAP_START + (i * BLOCK_SIZE)), blocks * BLOCK_SIZE, fn);
-            applySramAccessMask(srdBitmask);
+            addSramAccessWindow(&srdBitmask, (void *)(HEAP_START + (i * BLOCK_SIZE)), blocks * BLOCK_SIZE, index);
+            // applySramAccessMask(tcb[index].srd);
             return (void *)(HEAP_START + (i * BLOCK_SIZE)); // pointer to start address in mem
         }
 
@@ -84,12 +85,12 @@ void * mallocHeap(_fn fn, uint32_t size_in_bytes)
 }
 
 // REQUIRED: add your free code here and update the SRD bits for the current thread
-void freeHeap(_fn fn, void *address_from_malloc)
+void freeHeap(uint8_t index, void *address_from_malloc)
 {
     int blockIndex = ((uint32_t)p - HEAP_START) / BLOCK_SIZE;
 
     if (blockIndex < 0 || blockIndex >= NUM_BLOCKS) return; // check if bad pointer, out of heap range
-    if (blockArray[blockIndex].owner != fn || !blockArray[blockIndex].alloc) return; // not the owner of the memory or not allocated anyways
+    if (blockArray[blockIndex].owner != index || !blockArray[blockIndex].alloc) return; // not the owner of the memory or not allocated anyways
 
     int size = blockArray[blockIndex].size;
 
@@ -109,7 +110,15 @@ void freeHeap(_fn fn, void *address_from_malloc)
 // REQUIRED: add code to initialize the memory manager
 void initMemoryManager(void)
 {
-
+    // initialize block array
+    int i;
+    for (i = 0; i < NUM_BLOCKS; i++)
+    {
+        blockArray[i].alloc = false;
+        blockArray[i].owner = 0;
+        blockArray[i].size = 0;
+    }
+    srdBitmask = 0x0000000000000000;
 }
 
 // REQUIRED: add your custom MPU functions here (eg to return the srd bits)
@@ -197,7 +206,7 @@ void applySramAccessMask(uint64_t srdBitMask)
 }
 
 // adds access to the requested SRAM address range
-void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_in_bytes, _fn fn)
+void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_in_bytes, uint8_t index)
 {
     if (size_in_bytes % 1024 != 0)
     {
@@ -220,15 +229,9 @@ void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_
         *srdBitMask |= (uint64_t) 1 << i; // turns bit on at that subregion, gets RW access
         tcbsrd      |= (uint64_t) 1 << i; // turns bit on at that subregion for tcb
     }
-    // add srd bits to the tcb for the current thread
-    int j;
-    for (j = 0; j < MAX_TASKS; j++)
-    {
-        if (tcb[j].pid == fn)
-        {
-            tcb[j].srd = tcbsrd;
-        }
-    }
+    
+    // update tcb for the task
+    tcb[index].srd = tcbsrd;
 }
 
 

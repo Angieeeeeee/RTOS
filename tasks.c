@@ -87,10 +87,11 @@ void initHw(void)
     NVIC_SYS_HND_CTRL_R |= NVIC_SYS_HND_CTRL_USAGE | NVIC_SYS_HND_CTRL_BUS | NVIC_SYS_HND_CTRL_MEM;
 
     // Trap on Divide by Zero and Unalligned Access
-    NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0 ;
+    NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0;
 
     // set pendSV and SVCall to highest priority
-    // see the SYSHNDCTRL register on page 173 and the DIS0 register on page 144 of the datasheet
+    // svc priority: offset 0xD1C 31:29
+    // pendsv priority: offset 0xD20 23:21
 
 }
 
