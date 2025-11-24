@@ -25,6 +25,8 @@
     .def setAspOff
     .def setPrivOff
     .def setPrivOn
+    .def pushSW
+    .def popSW
 
 ;-----------------------------------------------------------------------------
 ; Register values and large immediate values
@@ -86,3 +88,14 @@ setPrivOn:
     MSR     CONTROL, r0
     ISB                  ;  instructions that were already fetched or partially executed before are discarded
     BX      lr
+
+pushSW:
+	SUB     r0, r0, #32        ; make room for r4-r11 (8 * 4)
+	STMIA   r0, {r4-r11}       ; store r4-r11 at [r0 .. r0+28]
+	BX      lr                 ; return new sp
+
+popSW:
+	LDMIA   r0, {r4-r11}       ; load r4-r11 from [r0 .. r0+28]
+	ADD     r0, r0, #32        ; move sp past r4-r11 frame
+	BX      lr                 ; return new sp
+

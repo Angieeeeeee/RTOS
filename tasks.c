@@ -20,19 +20,6 @@
 #include "kernel.h"
 #include "tasks.h"
 
-#define BLUE_LED   PORTF,2 // on-board blue LED
-#define RED_LED    PORTE,0 // off-board red LED
-#define ORANGE_LED PORTA,2 // off-board orange LED
-#define YELLOW_LED PORTA,3 // off-board yellow LED
-#define GREEN_LED  PORTA,4 // off-board green LED
-
-#define PB_0 PORTC,4
-#define PB_1 PORTC,5
-#define PB_2 PORTC,6
-#define PB_3 PORTC,7
-#define PB_4 PORTD,6
-#define PB_5 PORTD,7
-
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
@@ -45,31 +32,31 @@ void initHw(void)
     // Initialize system clock to 40 MHz
     initSystemClockTo40Mhz();
 
-    // Enable PB and LED ports 
-    enablePort(PORTA);      
+    // Enable PB and LED ports
+    enablePort(PORTA);
     enablePort(PORTC);
     enablePort(PORTD);
     enablePort(PORTE);
     enablePort(PORTF);
     _delay_cycles(3);
 
-    setPinCommitControl(PORTD, 7);      // D7 unlock 
+    setPinCommitControl(PORTD, 7);      // D7 unlock
 
-    // LED outputs 
-    selectPinPushPullOutput(LED_BLUE);
-    selectPinPushPullOutput(LED_GREEN);
-    selectPinPushPullOutput(LED_YELLOW);
-    selectPinPushPullOutput(LED_ORANGE);
-    selectPinPushPullOutput(LED_RED);
+    // LED outputs
+    selectPinPushPullOutput(BLUE_LED);
+    selectPinPushPullOutput(GREEN_LED);
+    selectPinPushPullOutput(YELLOW_LED);
+    selectPinPushPullOutput(ORANGE_LED);
+    selectPinPushPullOutput(RED_LED);
 
-    // PB inputs 
+    // PB inputs
     selectPinDigitalInput(PB_0);
     selectPinDigitalInput(PB_1);
     selectPinDigitalInput(PB_2);
     selectPinDigitalInput(PB_3);
     selectPinDigitalInput(PB_4);
     selectPinDigitalInput(PB_5);
-    // Pull up PBs 
+    // Pull up PBs
     enablePinPullup(PB_0);
     enablePinPullup(PB_1);
     enablePinPullup(PB_2);
@@ -83,15 +70,16 @@ void initHw(void)
     setPinValue(GREEN_LED, 0);
     waitMicrosecond(250000);
 
+    setPinValue(ORANGE_LED, 0);
+
     // Enable faults
     NVIC_SYS_HND_CTRL_R |= NVIC_SYS_HND_CTRL_USAGE | NVIC_SYS_HND_CTRL_BUS | NVIC_SYS_HND_CTRL_MEM;
 
     // Trap on Divide by Zero and Unalligned Access
-    NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0;
+    NVIC_CFG_CTRL_R |= NVIC_CFG_CTRL_DIV0 ;
 
     // set pendSV and SVCall to highest priority
-    // svc priority: offset 0xD1C 31:29
-    // pendsv priority: offset 0xD20 23:21
+    // see the SYSHNDCTRL register on page 173 and the DIS0 register on page 144 of the datasheet
 
 }
 
@@ -104,6 +92,7 @@ uint8_t readPbs(void)
     if (!getPinValue(PB_3)) return 3;
     if (!getPinValue(PB_4)) return 4;
     if (!getPinValue(PB_5)) return 5;
+    return 6; // if none are pressed
 }
 
 // one task must be ready at all times or the scheduler will fail
@@ -115,6 +104,31 @@ void idle(void)
         setPinValue(ORANGE_LED, 1);
         waitMicrosecond(1000);
         setPinValue(ORANGE_LED, 0);
+        //waitMicrosecond(1000000);
+        yield();
+    }
+}
+
+void idle2(void)
+{
+    while(true)
+    {
+        setPinValue(RED_LED, 1);
+        waitMicrosecond(1000);
+        setPinValue(RED_LED, 0);
+        //waitMicrosecond(1000000);
+        yield();
+    }
+}
+
+void idle3(void)
+{
+    while(true)
+    {
+        setPinValue(YELLOW_LED, 1);
+        waitMicrosecond(1000);
+        setPinValue(YELLOW_LED, 0);
+        //waitMicrosecond(1000000);
         yield();
     }
 }

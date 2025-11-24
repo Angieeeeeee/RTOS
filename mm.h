@@ -11,11 +11,18 @@
 #ifndef MM_H_
 #define MM_H_
 
+#include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
+#include "tm4c123gh6pm.h"
+#include "uart0.h"
+#include "kernel.h"
+
 // keeping track if blocks were assigned and to which pid
 typedef struct _BLOCK
 {
     bool alloc;      // 1 allocated, 0 not allocated
-    uint32_t owner;  // pid that owns it
+    void *owner;  // pid that owns it
     uint32_t size;
 } BLOCK;
 
@@ -33,8 +40,8 @@ BLOCK blockArray[NUM_BLOCKS];
 // Subroutines
 //-----------------------------------------------------------------------------
 
-void * mallocHeap(_fn fn, uint32_t size_in_bytes);
-void freeHeap(_fn fn, void *address_from_malloc);
+void * mallocHeap(uint32_t size_in_bytes);
+void freeHeap(void *address_from_malloc);
 void initMemoryManager(void);
 void setBackgroundRule(void);
 void allowFlashAccess(void);
@@ -44,5 +51,5 @@ uint64_t createSramAccessMask(void);
 void applySramAccessMask(uint64_t srdBitMask);
 void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_in_bytes);
 void initMpu(void);
-
+void dumpHeap(void);
 #endif

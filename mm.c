@@ -13,10 +13,13 @@
 //-----------------------------------------------------------------------------
 
 #include <stdint.h>
+#include <stdlib.h>
+#include <stdbool.h>
 #include "tm4c123gh6pm.h"
 #include "mm.h"
 #include "asm.h"
 #include "uart0.h"
+#include "faults.h"
 #include "kernel.h"
 
 //-----------------------------------------------------------------------------
@@ -26,12 +29,19 @@
 uint64_t srdBitmask = 0x0000000000000000;
 // there will be srd masks for each task in the tcb
 
+//typedef struct _BLOCK
+//{
+//    bool alloc;      // 1 allocated, 0 not allocated
+//    uint32_t owner;  // pid that owns it
+//    uint32_t size;
+//} BLOCK;
+
 //-----------------------------------------------------------------------------
 // Subroutines
 //-----------------------------------------------------------------------------
 
 // REQUIRED: add your malloc code here and update the SRD bits for the current thread
-void * mallocHeap(uint8_t index, uint32_t size_in_bytes)
+void * mallocHeap(uint32_t size_in_bytes)
 {
     if (!size_in_bytes || (size_in_bytes > 0x00002000)) return NULL;     // null if size zero or greater than a region
 
@@ -70,13 +80,13 @@ void * mallocHeap(uint8_t index, uint32_t size_in_bytes)
             for (k = i; k < i + blocks; k++)
             {
                 blockArray[k].alloc = true;
-                blockArray[k].owner = index;
+                blockArray[k].owner = tcb[taskCurrent].pid;
                 blockArray[k].size = blocks;
             }
-            // make those blocks have SRD bits 1 (RW access)
-            addSramAccessWindow(&srdBitmask, (void *)(HEAP_START + (i * BLOCK_SIZE)), blocks * BLOCK_SIZE, index);
+            // get srd bits and apply them outside
+            addSramAccessWindow(&srdBitmask, (void *)(HEAP_START + (i * BLOCK_SIZE)), blocks * BLOCK_SIZE);
             // applySramAccessMask(tcb[index].srd);
-            return (void *)(HEAP_START + (i * BLOCK_SIZE)); // pointer to start address in mem
+            return (void *)(HEAP_START + (i * BLOCK_SIZE) + (blocks * BLOCK_SIZE)); // pointer to end of block allocated
         }
 
         i += freeCount - 1; // if blocks not found, skip ahead to past the checked blocks
@@ -84,13 +94,14 @@ void * mallocHeap(uint8_t index, uint32_t size_in_bytes)
     return NULL; // failed to find space
 }
 
+//TODO: UPDATE FREE TO WORK ON POINTER POINTING TO TOP OF BLOCK
 // REQUIRED: add your free code here and update the SRD bits for the current thread
-void freeHeap(uint8_t index, void *address_from_malloc)
+void freeHeap(void *p)
 {
     int blockIndex = ((uint32_t)p - HEAP_START) / BLOCK_SIZE;
 
     if (blockIndex < 0 || blockIndex >= NUM_BLOCKS) return; // check if bad pointer, out of heap range
-    if (blockArray[blockIndex].owner != index || !blockArray[blockIndex].alloc) return; // not the owner of the memory or not allocated anyways
+    if (blockArray[blockIndex].owner != tcb[taskCurrent].pid || !blockArray[blockIndex].alloc) return; // not the owner of the memory or not allocated anyways
 
     int size = blockArray[blockIndex].size;
 
@@ -137,14 +148,14 @@ void allowFlashAccess(void)
     NVIC_MPU_BASE_R = 0x00000000;
     NVIC_MPU_ATTR_R |= NVIC_MPU_ATTR_ENABLE | // Enable Region
                        (17 << 1) |            // Region Size: 256KB - 2^18 (0x00000000 -> 0x00040000)
-                       (0b110 << 24);         // R only 
+                       (0b110 << 24);         // R only
 }
 
 // take away access from private peripherals
 void allowPeripheralAccess(void)
 {
     NVIC_MPU_NUMBER_R = 6;
-    NVIC_MPU_BASE_R = 0xE0000000;                   // Base Address of Peripherals 
+    NVIC_MPU_BASE_R = 0xE0000000;                   // Base Address of Peripherals
     NVIC_MPU_ATTR_R |=   NVIC_MPU_ATTR_ENABLE |     // Enable Region
                         (28 << 1) |                 // Region Size: 512MB - 2^29 (0xE0000000 -> 0x100000000)
                         (0b001 << 24) |             // RW only for priv
@@ -181,7 +192,7 @@ void setupSramAccess(void)
 
 uint64_t createSramAccessMask(void)
 {
-    return 0x0000000000000000;   
+    return 0x0000000000000000;
     // when SRD = 1 for subregion then the access will fall to background rule (RW for priv and unpriv)
 }
 
@@ -206,7 +217,7 @@ void applySramAccessMask(uint64_t srdBitMask)
 }
 
 // adds access to the requested SRAM address range
-void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_in_bytes, uint8_t index)
+void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_in_bytes)
 {
     if (size_in_bytes % 1024 != 0)
     {
@@ -229,9 +240,9 @@ void addSramAccessWindow(uint64_t *srdBitMask, uint32_t *baseAdd, uint32_t size_
         *srdBitMask |= (uint64_t) 1 << i; // turns bit on at that subregion, gets RW access
         tcbsrd      |= (uint64_t) 1 << i; // turns bit on at that subregion for tcb
     }
-    
+
     // update tcb for the task
-    tcb[index].srd = tcbsrd;
+    tcb[taskCurrent].srd = tcbsrd;
 }
 
 
@@ -245,8 +256,8 @@ void initMpu(void)
 
     NVIC_MPU_CTRL_R |= NVIC_MPU_CTRL_ENABLE | NVIC_MPU_CTRL_PRIVDEFEN;
 
-    setPsp((uint32_t *) 0x20008000);
-    setAspOn();
+//    setPsp((uint32_t *) 0x20008000);
+//    setAspOn();
 /*
 // trick to jump to the bottom of the heap
 // fill all regions then free them, the pointer will be at the end of the heap
@@ -322,3 +333,33 @@ void initMpu(void)
  *               | 4GB - Backgrnd |  8 subregions of 1024B each  - bits 0-7  RW for all
  *  0x0000 0000  |----------------|
  */
+
+void dumpHeap(void)
+{
+    putsUart0("HEAP BLOCK ALLOCATIONS\n");
+    putsUart0(" BLOCK |   ADDRESS   | REGION | ALLOC | SIZE | OWNER\n");
+
+    int i;
+    for (i = 0; i < NUM_BLOCKS; i++)
+    {
+        int address = 0x20001000 + (0x400 * i);
+        int region = ((i - 4) / 8) + 2;
+        if (i < 4) region = 1;
+        int size = blockArray[i].size;
+        int alloc = 0; if (blockArray[i].alloc == true) alloc = 1;
+        int owner = blockArray[i].owner;
+
+        putsUart0(uitoa(i));
+        putsUart0("  | ");
+        putsUart0(inttohex(address));
+        putsUart0(" | ");
+        putsUart0(uitoa(region));
+        putsUart0("  | ");
+        putsUart0(uitoa(alloc));
+        putsUart0("  | ");
+        putsUart0(uitoa(size));
+        putsUart0("  | ");
+        putsUart0(uitoa(owner));
+        putcUart0('\n');
+    }
+}

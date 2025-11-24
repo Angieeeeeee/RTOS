@@ -16,6 +16,7 @@
 #include "tm4c123gh6pm.h"
 #include "mm.h"
 #include "kernel.h"
+#include "faults.h"
 #include "asm.h"
 #include "uart0.h"
 
@@ -62,19 +63,21 @@ bool preemption = false;          // preemption (true) or cooperative (false)
 
 // tcb
 #define NUM_PRIORITIES   8
-struct _tcb
-{
-    uint8_t state;                 // see STATE_ values above
-    void *pid;                     // used to uniquely identify thread (add of task fn)
-    void *sp;                      // current stack pointer
-    uint8_t priority;              // 0=highest
-    uint8_t currentPriority;       // 0=highest (needed for pi)
-    uint32_t ticks;                // ticks until sleep complete
-    uint64_t srd;                  // MPU subregion disable bits
-    char name[16];                 // name of task used in ps command
-    uint8_t mutex;                 // index of the mutex in use or blocking the thread
-    uint8_t semaphore;             // index of the semaphore that is blocking the thread
-} tcb[MAX_TASKS];
+//struct _tcb
+//{
+//    uint8_t state;                 // see STATE_ values above
+//    void *pid;                     // used to uniquely identify thread (add of task fn)
+//    void *sp;                      // current stack pointer
+//    uint8_t priority;              // 0=highest
+//    uint8_t currentPriority;       // 0=highest (needed for pi)
+//    uint32_t ticks;                // ticks until sleep complete
+//    uint64_t srd;                  // MPU subregion disable bits
+//    char name[16];                 // name of task used in ps command
+//    uint8_t mutex;                 // index of the mutex in use or blocking the thread
+//    uint8_t semaphore;             // index of the semaphore that is blocking the thread
+//} tcb[MAX_TASKS];
+
+struct _tcb tcb[MAX_TASKS];
 
 /* from kernel.h:
 // function pointer
@@ -140,12 +143,12 @@ uint8_t rtosScheduler(void)
 {
     if (priorityScheduler)
     {
-        // priority based scheduling 
+        // priority based scheduling
         uint8_t highestPriority = 8; // higher than max
         uint8_t selectedTask = 0xFF; // invalid
         // find highest priority ready task
         int i;
-        for (i = 0; i < MAX_TASKS; i++)
+        for (i = 0; i < taskCount; i++)
         {
             if ((tcb[i].state == STATE_READY || tcb[i].state == STATE_UNRUN) && (tcb[i].priority < highestPriority))
             {
@@ -180,11 +183,24 @@ void startRtos(void)
     uint8_t task = rtosScheduler();
     // set srd bits
     applySramAccessMask(tcb[task].srd);
+
+    putsUart0("First task PSP = ");
+    putsUart0(inttohex((uint32_t)tcb[task].sp));
+    putcUart0('\n');
+
     // set PSP
     setPsp(tcb[task].sp);
+    printStack(tcb[task].sp);
+
     // set ASP bit
     setAspOn();
-    // TODO: 
+
+    // jump to thread
+    _fn entry = (_fn)tcb[task].pid;
+    setPrivOff();
+    entry();              // jump to task; never returns
+
+    // TODO: ?
     // call fn with fn add in R0
     // fn set TMPL bit
     // and PC <= fn
@@ -213,6 +229,7 @@ bool createThread(_fn fn, const char name[], uint8_t priority, uint32_t stackByt
             // find first available tcb record
             i = 0;
             while (tcb[i].state != STATE_INVALID) {i++;}
+            taskCurrent = i;
             tcb[i].state = STATE_UNRUN;
             tcb[i].pid = fn;
             tcb[i].priority = priority;
@@ -222,18 +239,21 @@ bool createThread(_fn fn, const char name[], uint8_t priority, uint32_t stackByt
             {
                 tcb[i].name[j] = name[j];
             }
-            tcb[i].sp = mallocHeap(i, stackBytes); // returns pointer to start of block
-            // tcb[i].srd updated in malloc function
+
+            uint32_t *sp = (uint32_t *)mallocHeap(stackBytes); // top of block allocated
+
+            // tcb[i].srd applied inside malloc(addSramAccessWindow)
             // make hw stack frame for first run
-            uint32_t *sp = (uint32_t *) tcb[i].sp;
-            sp[0] = 0;                     // r0
-            sp[1] = 0;                     // r1
-            sp[2] = 0;                     // r2
-            sp[3] = 0;                     // r3
-            sp[4] = 0;                     // r12
-            sp[5] = 0xFFFFFFFD;            // LR (return to thread mode using PSP)
-            sp[6] = (uint32_t) fn;         // PC (start address)
-            sp[7] = 0x01000000;            // xPSR (Thumb bit set)
+            *(--sp) = 0x01000000;               // xPSR
+            *(--sp) = (uint32_t)fn;             // PC
+            *(--sp) = 0;                        // LR
+            *(--sp) = 0;                        // R12
+            *(--sp) = 0;                        // R3
+            *(--sp) = 0;                        // R2
+            *(--sp) = 0;                        // R1
+            *(--sp) = 0;                        // R0
+            printStack(sp);
+            tcb[i].sp = (void *) sp; // pointer to spot R0 is in
 
             taskCount++;
             ok = true;
@@ -243,7 +263,7 @@ bool createThread(_fn fn, const char name[], uint8_t priority, uint32_t stackByt
 }
 
 // REQUIRED: modify this function to kill a thread
-// REQUIRED: free memory, remove any pending semaphore waiting,
+// REQUIRED: free memory, reMOVe any pending semaphore waiting,
 //           unlock any mutexes, mark state as killed
 void killThread(_fn fn)
 {
@@ -265,17 +285,14 @@ void yield(void)
 {
     // thread is unprivileged, so svc is needed to call pendsv (only available in priv mode)
     // svc pushes the task registers onto the PSP for context saving
-    asm("svc 0");
+    __asm("    SVC #0");
 }
 
 // REQUIRED: modify this function to support 1ms system timer
 // execution yielded back to scheduler until time elapses using pendsv
 void sleep(uint32_t tick)
 {
-    tcb[taskCurrent].ticks += tick;
-    tcb[taskCurrent].state = STATE_DELAYED;
-    // switch to another task while sleeping
-    yield();
+    __asm("    SVC #1");
 }
 
 // REQUIRED: modify this function to wait a semaphore using pendsv
@@ -403,36 +420,31 @@ void systickIsr(void)
 // 2. save the PSP in tcb, original sp will be shifted to make room for the registers
 // 3. call the scheduler to get the next task
 // 4. set the PSP to the new task's sp
-// 5. if task is unrun, set up the stack
+// 5. if task is unrun, use initial stack made in createThread
 // 6. if task is ready, retrieve r4-r11 from stack
 // 8. set the srd bits for the new task
 
 void pendSvIsr(void)
 {
+    //putsUart0("inside pendSvIsr \n");
     // get stack pointer, has HW: r0-r3, r12, LR, PC, xPSR
     uint32_t *sp = getPsp();
-    // save SW: r4-r11
-    uint32_t r4, r5, r6, r7, r8, r9, r10, r11;
-    asm("mov %0, r4"  : "=r" (r4));
-    asm("mov %0, r5"  : "=r" (r5));
-    asm("mov %0, r6"  : "=r" (r6));
-    asm("mov %0, r7"  : "=r" (r7));
-    asm("mov %0, r8"  : "=r" (r8));
-    asm("mov %0, r9"  : "=r" (r9));
-    asm("mov %0, r10" : "=r" (r10));
-    asm("mov %0, r11" : "=r" (r11));
-    // store on stack
-    sp -= 8; // make room for r4-r11
-    sp[0] = r4;
-    sp[1] = r5;
-    sp[2] = r6;
-    sp[3] = r7;
-    sp[4] = r8;
-    sp[5] = r9;
-    sp[6] = r10;
-    sp[7] = r11;
-    // save the stack pointer pointing to r4-r11
+
+//    putsUart0("1. hw\n");
+//    printStack(sp);
+
+    // push r4-11 under stack
+    sp = pushSW(sp);
+
+//    putsUart0("2. sw\n");
+//    printStack(sp);
+
+    // update the actual stack
+    setPsp(sp);
+
+    // save the updated pointer
     tcb[taskCurrent].sp = (void *) sp;
+
     // update state (not if blocked or delayed)
     if (tcb[taskCurrent].state == STATE_UNRUN || tcb[taskCurrent].state == STATE_READY)
     {
@@ -441,45 +453,119 @@ void pendSvIsr(void)
 
     // get next task
     uint8_t task = rtosScheduler();
-    
+
+    // psp for next stack
+    sp = (uint32_t *) tcb[task].sp;
+
     // if its been run before, pop r4-11 values
     if (tcb[task].state == STATE_READY)
     {
-        uint32_t *sp = (uint32_t *) tcb[task].sp;
-        uint32_t r4 = sp[0];
-        uint32_t r5 = sp[1];
-        uint32_t r6 = sp[2];
-        uint32_t r7 = sp[3];
-        uint32_t r8 = sp[4];
-        uint32_t r9 = sp[5];
-        uint32_t r10 = sp[6];
-        uint32_t r11 = sp[7];
-        asm("mov r4,  %0" : : "r" (r4));
-        asm("mov r5,  %0" : : "r" (r5));
-        asm("mov r6,  %0" : : "r" (r6));
-        asm("mov r7,  %0" : : "r" (r7));
-        asm("mov r8,  %0" : : "r" (r8));
-        asm("mov r9,  %0" : : "r" (r9));
-        asm("mov r10, %0" : : "r" (r10));
-        asm("mov r11, %0" : : "r" (r11));
-        tcb[task].sp = (void *) (sp + 8); // adjust sp to remove r4-r11
+//        putsUart0("3. recovered\n");
+//        printStack(sp);
+        // set r4-11 from the stack
+        sp = popSW(sp);
     }
+//    putsUart0("4. applied\n");
+//    printStack(sp);
+    // if unrun the hw stack is made in createThread()
+    tcb[task].sp = (void *) sp;
     // set srd bits
     applySramAccessMask(tcb[task].srd);
     // set PSP
     setPsp(tcb[task].sp);
+
+    __asm volatile(
+        " MOVW   r0, #0xFFFD     \n"
+        " MOVT   r0, #0xFFFF     \n"
+        " MOV    LR, r0          \n"
+        " BX     LR              \n"
+    );
 }
 
 // REQUIRED: modify this function to add support for the service call
 // REQUIRED: in preemptive code, add code to handle synchronization primitives
 void svCallIsr(void)
 {
-    uint32_t svcNumber = 0;
-    // the immediate in the svc is 2 bytes back from the link register? (PC at svc call time)
-    // do i even need sv number ??
+    uint32_t *stacked = getPsp();
+    uint32_t stackedPc = stacked[6];
+    // svc num is in pc - 2
+    uint8_t svcNumber = *((uint8_t *)(stackedPc - 2));
+
+    void *arg = (void *)stacked[0]; // r0
+
+    //putsUart0("svc number found is "); putsUart0(uitoa(svcNumber));
 
     if (svcNumber == 0) // yield
     {
         NVIC_INT_CTRL_R = NVIC_INT_CTRL_PEND_SV; // trigger pendsv
+    }
+    else if (svcNumber == 1) // sleep
+    {
+            //tcb[taskCurrent].ticks = (unit32_t) arg;
+            //tcb[taskCurrent].state = STATE_DELAYED;
+            // save context
+            // sth about systick
+    }
+}
+
+
+// name pid state sp srd priority
+void printTcb(void)
+{
+    putsUart0("Name: PID State SP SRD Priority\n");
+    uint8_t i;
+    for (i = 0; i < taskCount; i++)
+    {
+        putsUart0(tcb[i].name);
+        putsUart0(": ");
+        putsUart0(uitoa(tcb[i].pid));
+        putsUart0(" ");
+        switch (tcb[i].state)
+        {
+            case STATE_INVALID:
+                putsUart0("invalid");
+                break;
+            case STATE_UNRUN:
+                putsUart0("unrun");
+                break;
+            case STATE_READY:
+                putsUart0("ready");
+                break;
+            case STATE_DELAYED:
+                putsUart0("delayed");
+                break;
+            case STATE_BLOCKED_SEMAPHORE:
+                putsUart0("blocked by semaphore");
+                break;
+            case STATE_BLOCKED_MUTEX:
+                putsUart0("blocked by mutex");
+                break;
+            case STATE_KILLED:
+                putsUart0("killed");
+                break;
+        }
+        putsUart0(" ");
+        putsUart0(uitoa((uint32_t)tcb[i].sp));
+        putsUart0(" ");
+        putsUart0(uitoa(tcb[i].srd));
+        putsUart0(" ");
+        putsUart0(uitoa(tcb[i].priority));
+        putsUart0("\n");
+    }
+}
+
+// check whats inside addresses
+void printStack(void *sp)
+{
+    // print sp and 8 words above
+    uint32_t *stack = (uint32_t *) sp;
+    uint8_t i;
+    for (i = 0; i < 8; i++)
+    {
+        putsUart0(inttohex((uint32_t)stack));
+        putsUart0(": ");
+        putsUart0(inttohex(*stack));
+        putsUart0("\n");
+        stack++;
     }
 }
